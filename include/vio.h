@@ -148,6 +148,7 @@ public:
   vector<pointWithVar> append_voxel_points;
   FramePtr new_frame_;
   cv::Mat img_cp, img_rgb, img_test;
+  double cur_img_time_ = 0.0;   //!< 当前帧图像时间，写入新建 VisualPoint 的 stamp_
 
   enum CellType
   {
@@ -171,6 +172,9 @@ public:
   void computeJacobianAndUpdateEKF(cv::Mat img);
   void resetGrid();
   void updateVisualMapPoints(cv::Mat img);
+  // 滚动淘汰：删除 stamp_ < cutoff_time 的视觉地图点（连带其 Feature 与所钉住的
+  // 原始图像），并回收空体素与 warp 缓存。返回删掉的点数。
+  size_t pruneVisualMap(double cutoff_time);
   void getWarpMatrixAffine(const vk::AbstractCamera &cam, const Vector2d &px_ref, const Vector3d &f_ref, const double depth_ref, const SE3<double> &T_cur_ref,
                            const int level_ref, 
                            const int pyramid_level, const int halfpatch_size, Matrix2d &A_cur_ref);

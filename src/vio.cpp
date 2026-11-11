@@ -250,6 +250,54 @@ void VIOManager::insertPointIntoVoxelMap(VisualPoint *pt_new)
   }
 }
 
+// 滚动淘汰：把已经落盘的那批帧所建的可视地图点整体释放。
+// 每个 VisualPoint 的 ref_patch/obs_ 是 Feature，Feature 里挂着 cv::Mat img_
+// （整幅原始图像），只要点还在，那帧图像就永远释放不掉 —— 这是 FAST-LIVO2
+// 内存随时间线性增长的主因。删除点会连带删除 Feature 并让 Mat 引用计数归零。
+size_t VIOManager::pruneVisualMap(double cutoff_time)
+{
+  size_t removed = 0, voxels_removed = 0;
+  for (auto it = feat_map.begin(); it != feat_map.end();)
+  {
+    VOXEL_POINTS *voxel = it->second;
+    auto &pts = voxel->voxel_points;
+    size_t keep = 0;
+    for (size_t i = 0; i < pts.size(); ++i)
+    {
+      VisualPoint *p = pts[i];
+      if (p != nullptr && p->stamp_ < cutoff_time)
+      {
+        delete p;
+        ++removed;
+      }
+      else
+      {
+        pts[keep++] = p;
+      }
+    }
+    pts.resize(keep);
+    voxel->count = static_cast<int>(keep);
+    if (pts.empty())
+    {
+      delete voxel;
+      it = feat_map.erase(it);
+      ++voxels_removed;
+    }
+    else
+    {
+      ++it;
+    }
+  }
+  // warp 缓存按 Feature id 索引，点删掉后这些 id 全部失效，且 normal_en=true 时
+  // 原代码从不清空，会一直增长。
+  for (auto &kv : warp_map) delete kv.second;
+  warp_map.clear();
+
+  printf("[ VIO ] rolling prune: -%zu points, -%zu voxels, cutoff %.6f\n",
+         removed, voxels_removed, cutoff_time);
+  return removed;
+}
+
 void VIOManager::getWarpMatrixAffineHomography(const vk::AbstractCamera &cam, const V2D &px_ref, const V3D &xyz_ref, const V3D &normal_ref,
                                                   const SE3<double> &T_cur_ref, const int level_ref, Matrix2d &A_cur_ref)
 {
@@ -881,6 +929,7 @@ void VIOManager::generateVisualMapPoints(cv::Mat img, vector<pointWithVar> &pg)
       getImagePatch(img, pc, patch, 0);
 
       VisualPoint *pt_new = new VisualPoint(pt);
+      pt_new->stamp_ = cur_img_time_;
 
       Vector3d f = cam->cam2world(pc);
       Feature *ftr_new = new Feature(pt_new, patch, pc, f, new_frame_->T_f_w_, 0);
@@ -1893,6 +1942,7 @@ void VIOManager::dumpDataForColmap()
 
 void VIOManager::processFrame(cv::Mat &img, vector<pointWithVar> &pg, const unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &feat_map, double img_time)
 {
+  cur_img_time_ = img_time;
   if (width != img.cols || height != img.rows)
   {
     if (img.empty()) printf("[ VIO ] Empty Image!\n");

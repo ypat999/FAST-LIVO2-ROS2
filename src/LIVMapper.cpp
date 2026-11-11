@@ -1482,6 +1482,10 @@ void LIVMapper::publish_frame_world(const rclcpp::Publisher<sensor_msgs::msg::Po
         PointCloudXYZI().swap(*pcl_wait_save_intensity);
       }
       scan_wait_num = 0;
+
+      // 滚动窗口：本片彩色点云已经落盘，把这批帧的原始数据（整幅图像 + 视觉地图点）
+      // 一起释放；stamp_ == update_time 的当前帧点保留，留到下一轮继续匹配。
+      if (slam_mode_ == LIVO && img_en) vio_manager->pruneVisualMap(update_time);
     }
     
     if(LidarMeasures.lio_vio_flg == LIO || LidarMeasures.lio_vio_flg == LO)

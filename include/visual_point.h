@@ -35,6 +35,7 @@ public:
   bool is_normal_initialized_;  //!< True if the normal is initialized.
   bool has_ref_patch_;          //!< True if the point has a reference patch.
   Feature *ref_patch;           //!< Reference patch of the point.
+  double stamp_ = 0.0;          //!< 建点时刻的图像时间，用于滚动淘汰
 
   VisualPoint(const Vector3d &pos);
   ~VisualPoint();
