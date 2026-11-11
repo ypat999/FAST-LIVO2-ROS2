@@ -171,6 +171,9 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("imu.ba_bg_est_en", ba_bg_est_en);
 
   this->node->get_parameter("preprocess.blind", p_pre->blind);
+  // blind_sqr 在本 fork 中从未被赋值（构造/set() 都漏了），必须显式同步，
+  // 否则近距过滤失效，(0,0,0) 无效点会进入建图与 ICP。
+  p_pre->blind_sqr = p_pre->blind * p_pre->blind;
   this->node->get_parameter("preprocess.filter_size_surf", filter_size_surf_min);
   this->node->get_parameter("preprocess.lidar_type", p_pre->lidar_type);
   this->node->get_parameter("preprocess.scan_line", p_pre->N_SCANS);
@@ -285,7 +288,7 @@ void LIVMapper::initializeFiles()
 void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node, image_transport::ImageTransport &it_)
 {
   image_transport::ImageTransport it(this->node);
-  if (p_pre->lidar_type == AVIA) {
+  if (p_pre->lidar_type == AVIA || p_pre->lidar_type == MID360) {
 #if defined(USE_LIVOX_ROS_DRIVER2) && defined(USE_LIVOX_INTERFACES)
     // Both livox msg packages available — use livox_msg_type param to select
     // Options: "livox_ros_driver2" (default), "livox_interfaces" (legacy driver)
@@ -1558,7 +1561,9 @@ void LIVMapper::publish_odometry(const rclcpp::Publisher<nav_msgs::msg::Odometry
 {
   odomAftMapped.header.frame_id = "camera_init";
   odomAftMapped.child_frame_id = "aft_mapped";
-  odomAftMapped.header.stamp = this->node->get_clock()->now(); //.ros::Time()fromSec(last_timestamp_lidar);
+  // [Super-LIVO 消融仪器化] 发布时刻改用 lidar 帧时刻（与 Log/result/*.txt 同基）。
+  // 原始实现为 node->get_clock()->now()（墙钟，含 0~110ms 发布延迟）。
+  odomAftMapped.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
   set_posestamp(odomAftMapped.pose.pose);
 
   static std::shared_ptr<tf2_ros::TransformBroadcaster> br;
