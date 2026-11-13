@@ -12,6 +12,7 @@ which is included as part of this source code package.
 
 #include "LIVMapper.h"
 #include <vikit/camera_loader.h>
+#include <opencv2/imgproc.hpp>
 
 using namespace Sophus;
 LIVMapper::LIVMapper(rclcpp::Node::SharedPtr &node, std::string node_name)
@@ -119,6 +120,8 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->declare_parameter<vector<double>>("extrin_calib.Rcl", vector<double>{});
   this->node->declare_parameter<double>("debug.plot_time", -10);
   this->node->declare_parameter<int>("debug.frame_cnt", 6);
+  this->node->declare_parameter<bool>("camera.undistort_en", true);
+  this->node->declare_parameter<vector<double>>("camera.dist_coeffs", vector<double>{});
 
   this->node->declare_parameter<double>("publish.blind_rgb_points", 0.01);
   this->node->declare_parameter<int>("publish.pub_scan_num", 1);
@@ -190,6 +193,8 @@ void LIVMapper::readParameters(rclcpp::Node::SharedPtr &node)
   this->node->get_parameter("extrin_calib.Rcl", cameraextrinR);
   this->node->get_parameter("debug.plot_time", plot_time);
   this->node->get_parameter("debug.frame_cnt", frame_cnt);
+  this->node->get_parameter("camera.undistort_en", undistort_en);
+  this->node->get_parameter("camera.dist_coeffs", cam_dist_coeffs);
 
   this->node->get_parameter("publish.blind_rgb_points", blind_rgb_points);
   this->node->get_parameter("publish.pub_scan_num", pub_scan_num);
@@ -1080,6 +1085,39 @@ void LIVMapper::img_cbk(const sensor_msgs::msg::Image::ConstSharedPtr &msg_in)
   }
 
   cv::Mat img_cur = getImageFromMsg(msg);
+
+  // 相机畸变补偿：
+  // FAST-Calib 求外参时是「先 cv::undistort 去畸变、再用纯针孔 K 投影」，
+  // 而 vikit 的 PinholeCamera 只做针孔投影（cam_d0..d3 被读取但不使用）。
+  // 于是 FAST-LIVO2 拿针孔模型去投影原始畸变图，视场中部约差 9 px、边缘反向
+  // 约差 7 px，表现为标定板中心尚可、墙面/门框边缘明显着色错位。
+  // 这里按同一套 K / D 先把图去畸变，使投影模型与实际像素一一对应。
+  {
+    static cv::Mat map1, map2;
+    if (undistort_en && cam_dist_coeffs.size() >= 4 && map1.empty())
+    {
+      const double k1 = cam_dist_coeffs[0];
+      const double k2 = cam_dist_coeffs[1];
+      const double p1 = cam_dist_coeffs[2];
+      const double p2 = cam_dist_coeffs[3];
+      const vk::AbstractCamera *cam = vio_manager->cam;
+      const cv::Mat K = (cv::Mat_<double>(3, 3) << cam->fx(), 0.0, cam->cx(),
+                                                 0.0, cam->fy(), cam->cy(),
+                                                 0.0, 0.0, 1.0);
+      const cv::Mat D = (cv::Mat_<double>(1, 4) << k1, k2, p1, p2);
+      cv::initUndistortRectifyMap(K, D, cv::Mat(), K, cv::Size(cam->width(), cam->height()), CV_16SC2, map1, map2);
+      RCLCPP_INFO(this->node->get_logger(),
+                  "[ IMG ] undistort enabled: k1=%.6f k2=%.6f p1=%.8f p2=%.8f %dx%d",
+                  k1, k2, p1, p2, cam->width(), cam->height());
+    }
+    if (!map1.empty())
+    {
+      cv::Mat img_ud;
+      cv::remap(img_cur, img_ud, map1, map2, cv::INTER_LINEAR);
+      img_cur = img_ud;
+    }
+  }
+
   img_buffer.push_back(img_cur);
   img_time_buffer.push_back(img_time_correct);
 

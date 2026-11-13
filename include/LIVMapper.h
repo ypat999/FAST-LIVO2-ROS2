@@ -126,6 +126,8 @@ public:
   int outlier_threshold;
   double plot_time;
   int frame_cnt;
+  bool undistort_en = true;
+  std::vector<double> cam_dist_coeffs;
   double img_time_offset = 0.0;
   bool rolling_shutter_enable = false;
   double rs_tr_readout = 0.0;
