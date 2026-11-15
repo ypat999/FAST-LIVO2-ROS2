@@ -318,6 +318,10 @@ void LIVMapper::initializeSubscribersAndPublishers(rclcpp::Node::SharedPtr &node
   sub_img = this->node->create_subscription<sensor_msgs::msg::Image>(img_topic, 200000, std::bind(&LIVMapper::img_cbk, this, std::placeholders::_1));
   
   pubLaserCloudFullRes = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 100);
+  pubLaserCloudBody = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 100);
+  pubOdomAftMappedLidar = this->node->create_publisher<nav_msgs::msg::Odometry>("/aft_mapped_lidar_to_init", 100);
+  // VIO 光度修正后的 LiDAR 位姿（与 /cloud_registered_body 同戳配对）
+  pubOdomVioLidar = this->node->create_publisher<nav_msgs::msg::Odometry>("/vio/odom_lidar", 100);
   pubNormal = this->node->create_publisher<visualization_msgs::msg::MarkerArray>("/visualization_marker", 100);
   pubSubVisualMap = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_visual_sub_map_before", 100);
   pubLaserCloudEffect = this->node->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 100);
@@ -512,6 +516,26 @@ void LIVMapper::handleVIO()
   //   visual_sub_map->push_back(temp_map);
   // }
 
+  // 此时 _state 已被视觉光度更新修正，new_frame_->T_f_w_ 与官方 publish_frame_world
+  // 染色所用的相机位姿严格一致；这里导出同刻 LiDAR 位姿，供离线染色复现使用。
+  {
+    nav_msgs::msg::Odometry odom_vio_lidar;
+    odom_vio_lidar.header.frame_id = "camera_init";
+    odom_vio_lidar.child_frame_id = "vio_lidar";
+    odom_vio_lidar.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
+    M3D R_wl = _state.rot_end * extR;
+    V3D t_wl = _state.rot_end * extT + _state.pos_end;
+    Eigen::Quaterniond q_wl(R_wl);
+    odom_vio_lidar.pose.pose.position.x = t_wl[0];
+    odom_vio_lidar.pose.pose.position.y = t_wl[1];
+    odom_vio_lidar.pose.pose.position.z = t_wl[2];
+    odom_vio_lidar.pose.pose.orientation.x = q_wl.x();
+    odom_vio_lidar.pose.pose.orientation.y = q_wl.y();
+    odom_vio_lidar.pose.pose.orientation.z = q_wl.z();
+    odom_vio_lidar.pose.pose.orientation.w = q_wl.w();
+    pubOdomVioLidar->publish(odom_vio_lidar);
+  }
+
   publish_frame_world(pubLaserCloudFullRes, vio_manager);
   publish_img_rgb(pubImage, vio_manager);
 
@@ -631,6 +655,33 @@ void LIVMapper::handleLIO()
   *pcl_w_wait_pub = *laserCloudWorld;
 
   publish_frame_world(pubLaserCloudFullRes, vio_manager);
+
+  // 体系(LiDAR 系)去畸变点云 + 同刻 LiDAR 位姿，供方案 A/B 着色节点做逐点运动补偿。
+  // 注意：feats_undistort 在 LiDAR 系，_state 是 IMU 位姿，故位姿需右乘 LiDAR->IMU 外参。
+  {
+    sensor_msgs::msg::PointCloud2 body_msg;
+    pcl::toROSMsg(*feats_undistort, body_msg);
+    body_msg.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
+    body_msg.header.frame_id = "body";
+    pubLaserCloudBody->publish(body_msg);
+
+    nav_msgs::msg::Odometry odom_lidar;
+    odom_lidar.header.frame_id = "camera_init";
+    odom_lidar.child_frame_id = "aft_mapped_lidar";
+    odom_lidar.header.stamp = sec2Stamp(LidarMeasures.last_lio_update_time);
+    M3D R_wl = _state.rot_end * extR;
+    V3D t_wl = _state.rot_end * extT + _state.pos_end;
+    Eigen::Quaterniond q_wl(R_wl);
+    odom_lidar.pose.pose.position.x = t_wl[0];
+    odom_lidar.pose.pose.position.y = t_wl[1];
+    odom_lidar.pose.pose.position.z = t_wl[2];
+    odom_lidar.pose.pose.orientation.x = q_wl.x();
+    odom_lidar.pose.pose.orientation.y = q_wl.y();
+    odom_lidar.pose.pose.orientation.z = q_wl.z();
+    odom_lidar.pose.pose.orientation.w = q_wl.w();
+    pubOdomAftMappedLidar->publish(odom_lidar);
+  }
+
   if (pub_effect_point_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_);
   if (voxelmap_manager->config_setting_.is_pub_plane_map_) voxelmap_manager->pubVoxelMap();
   publish_path(pubPath);

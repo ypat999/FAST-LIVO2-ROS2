@@ -197,6 +197,12 @@ public:
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_img;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudFullRes;
+  // 体系(LiDAR 系)去畸变点云：供外部着色节点（方案 A/B）做逐点运动补偿
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudBody;
+  // LiDAR 位姿（FL2 原生 _state 是 IMU 位姿，这里额外给出同刻的 LiDAR 位姿）
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubOdomAftMappedLidar;
+  // 视觉-惯性(VIO)光度更新之后的同刻 LiDAR 位姿，即官方染色实际使用的最终位姿
+  rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pubOdomVioLidar;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pubNormal;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubSubVisualMap;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pubLaserCloudEffect;
